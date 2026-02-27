@@ -40,6 +40,110 @@ ralph.sh (bash loop)           ← Zero intelligence. Parses signals, calls proc
     └── claude -p (Amelia)     ← Fresh process on block. Reads docs. Provides guidance.
 ```
 
+## Architecture
+
+```
+                              /ralph --epic N
+                                    │
+                    ┌───────────────────────────────┐
+                    │          SKILL.md              │
+                    │                               │
+                    │  Validate prerequisites        │
+                    │  Initialize PROGRESS.md        │
+                    │  Create branch ralph/epic-N    │
+                    └───────────────┬───────────────┘
+                                    │
+     ┌──────────────────────────────▼──────────────────────────────┐
+     │                       ralph.sh                              │
+     │                  "Zero intelligence bash loop"              │
+     │                                                             │
+     │  ┌────────────────────────────────────────────────────────┐ │
+     │  │  OUTER LOOP ─ for each story (sequential)             │ │
+     │  │                                                        │ │
+     │  │  Read PROGRESS.md → skip done/blocked → set in-progress│ │
+     │  │                                                        │ │
+     │  │  ┌──────────────────────────────────────────────────┐  │ │
+     │  │  │  INNER LOOP ─ continuations (max 5 per story)    │  │ │
+     │  │  │                                                  │  │ │
+     │  │  │  ┌──────────────────────────────────┐            │  │ │
+     │  │  │  │    Fresh claude -p  (Ralph)       │            │  │ │
+     │  │  │  │    Zero context accumulation      │            │  │ │
+     │  │  │  │                                   │            │  │ │
+     │  │  │  │  Reads:                           │            │  │ │
+     │  │  │  │   • Story file (read-only spec)   │            │  │ │
+     │  │  │  │   • PROGRESS.md (relay baton)     │            │  │ │
+     │  │  │  │   • project-context.md            │            │  │ │
+     │  │  │  │   • Retry context (if attempt >1) │            │  │ │
+     │  │  │  │                                   │            │  │ │
+     │  │  │  │  Does:                            │            │  │ │
+     │  │  │  │   • Implements tasks in order     │            │  │ │
+     │  │  │  │   • Commits after each task       │            │  │ │
+     │  │  │  │   • Runs check/test/lint          │            │  │ │
+     │  │  │  └──────────────┬────────────────────┘            │  │ │
+     │  │  │                 │                                 │  │ │
+     │  │  │        ┌────────┴────────┬──────────────┐         │  │ │
+     │  │  │        ▼                 ▼              ▼         │  │ │
+     │  │  │     DONE             BLOCKED        MAX-TURNS     │  │ │
+     │  │  │       ✓                ✗           (no signal)    │  │ │
+     │  │  │       │                │              │           │  │ │
+     │  │  │       │                │         commits made?    │  │ │
+     │  │  │       │                │          ╱        ╲      │  │ │
+     │  │  │       │                │        YES         NO    │  │ │
+     │  │  │       │                │         │           │    │  │ │
+     │  │  │       │                │     CONTINUE     BLOCK   │  │ │
+     │  │  │       │                │     (new fresh   (same   │  │ │
+     │  │  │       │                │      process,    as      │  │ │
+     │  │  │       │                │      git work    blocked)│  │ │
+     │  │  │       │                │      preserved)          │  │ │
+     │  │  └───────┼────────────────┼──────────────────────────┘  │ │
+     │  │          │                │                              │ │
+     │  │          │       ┌────────▼────────────────┐             │ │
+     │  │          │       │  Fresh claude -p (Amelia)│             │ │
+     │  │          │       │  Senior code reviewer   │             │ │
+     │  │          │       │                         │             │ │
+     │  │          │       │  Reads everything:      │             │ │
+     │  │          │       │   • PROGRESS.md         │             │ │
+     │  │          │       │   • BLOCKERS.md         │             │ │
+     │  │          │       │   • git log             │             │ │
+     │  │          │       │   • Architecture docs   │             │ │
+     │  │          │       │                         │             │ │
+     │  │          │       │  Verdict:               │             │ │
+     │  │          │       │  ┌────────┬────────┐    │             │ │
+     │  │          │       │  │ RETRY  │  HALT  │    │             │ │
+     │  │          │       │  │ +guide │  stop  │    │             │ │
+     │  │          │       │  └───┬────┴───┬────┘    │             │ │
+     │  │          │       └──────┼────────┼─────────┘             │ │
+     │  │          │              │        │                       │ │
+     │  │          │         inner loop    ▼                       │ │
+     │  │          │         (w/ guidance) STOP ──► Human          │ │
+     │  │          │                                               │ │
+     │  │          ▼                                               │ │
+     │  │     next story ─────────────────────────────────────►    │ │
+     │  └─────────────────────────────────────────────────────────┘ │
+     └─────────────────────────────────────────────────────────────┘
+
+              ┌─────────── Shared State ───────────┐
+              │                                     │
+              │  PROGRESS.md       git history      │
+              │  (relay baton)     (committed code)  │
+              │  ┌────────────┐   ┌──────────────┐  │
+              │  │ Story table │   │ feat: Task 1 │  │
+              │  │ Relay notes │   │ feat: Task 2 │  │
+              │  │ Attempts    │   │ test: Task 3 │  │
+              │  └────────────┘   └──────────────┘  │
+              │                                     │
+              │  BLOCKERS.md       story-N.M-record │
+              │  (failure log)     (execution log)   │
+              │  ┌────────────┐   ┌──────────────┐  │
+              │  │ Issue       │   │ Duration     │  │
+              │  │ Attempts    │   │ Amelia notes │  │
+              │  │ Needs       │   │ File list    │  │
+              │  └────────────┘   └──────────────┘  │
+              └─────────────────────────────────────┘
+```
+
+Each `claude -p` invocation is a **disposable worker** with zero memory. The only things that survive between runs are **PROGRESS.md** (the relay baton) and **git commits** (the actual work). Ralph follows the story spec mechanically; Amelia provides the brains when things go wrong.
+
 ## Installation
 
 ```bash
