@@ -25,6 +25,7 @@ TEST_CMD="npm run test"
 CHECK_CMD="npm run check"
 LINT_CMD="npm run lint"
 MAX_TURNS=200
+MAX_CONTINUATIONS=5  # max fresh instances for same story on max-turns (if progress is made)
 AMELIA_MAX_TURNS=20
 REVIEW_EVERY=0  # 0 = only on block
 START_FROM=""
@@ -350,64 +351,79 @@ $($TEST_CMD --if-present 2>&1 | tail -50)" \
   update_sprint_status "$STORY_KEY" "in-progress"
   increment_attempts "$STORY_KEY"
 
-  # Build retry context
-  RETRY_CONTEXT=""
-  if [ "$CURRENT_ATTEMPTS" -gt 0 ]; then
-    RETRY_CONTEXT="
+  # ─── Inner loop: execute with continuations on max-turns ───
+  STORY_RESULT=""  # "done", "blocked", or "halt" — controls outer loop
+  CONTINUATIONS=0
+
+  while true; do
+    # Build retry/continuation context
+    RETRY_CONTEXT=""
+    CURRENT_ATTEMPTS=$(get_story_attempts "$STORY_KEY")
+    if [ "$CONTINUATIONS" -gt 0 ]; then
+      RETRY_CONTEXT="
+---
+## CONTINUATION
+**This is continuation #$CONTINUATIONS** (session $((CONTINUATIONS + 1)) of max $MAX_CONTINUATIONS).
+The previous session hit the turn limit. Your committed work is preserved in git.
+**Check git log and the codebase to see what's already done, then continue from where the previous session left off.**
+Do NOT redo work that's already committed."
+    elif [ "$CURRENT_ATTEMPTS" -gt 1 ]; then
+      RETRY_CONTEXT="
 ---
 ## RETRY INFORMATION
-**This is attempt #$((CURRENT_ATTEMPTS + 1))** for this story."
-    PREV_NOTES=$(get_story_notes "$STORY_KEY")
-    [ -n "$PREV_NOTES" ] && RETRY_CONTEXT="$RETRY_CONTEXT
+**This is attempt #$CURRENT_ATTEMPTS** for this story."
+      PREV_NOTES=$(get_story_notes "$STORY_KEY")
+      [ -n "$PREV_NOTES" ] && RETRY_CONTEXT="$RETRY_CONTEXT
 **Previous block reason:** $PREV_NOTES"
-    RECORD_FILE="$RUNTIME_DIR/story-${STORY_KEY}-record.md"
-    if [ -f "$RECORD_FILE" ]; then
-      AMELIA_GUIDANCE=$(sed -n '/^## Amelia Guidance/,/^## /p' "$RECORD_FILE" | head -n -1)
-      [ -n "$AMELIA_GUIDANCE" ] && RETRY_CONTEXT="$RETRY_CONTEXT
+      RECORD_FILE="$RUNTIME_DIR/story-${STORY_KEY}-record.md"
+      if [ -f "$RECORD_FILE" ]; then
+        AMELIA_GUIDANCE=$(sed -n '/^## Amelia Guidance/,/^## /p' "$RECORD_FILE" | head -n -1)
+        [ -n "$AMELIA_GUIDANCE" ] && RETRY_CONTEXT="$RETRY_CONTEXT
 $AMELIA_GUIDANCE"
-    fi
-    RETRY_CONTEXT="$RETRY_CONTEXT
+      fi
+      RETRY_CONTEXT="$RETRY_CONTEXT
 **Try a different approach than before.**"
-  fi
+    fi
 
-  # Build prompt
-  USER_PROMPT="## Current Progress
+    # Build prompt (re-reads PROGRESS.md each iteration for fresh relay notes)
+    USER_PROMPT="## Current Progress
 $(cat "$PROGRESS_FILE")
 ---
 ## Your Story
 $(cat "$STORY_FILE")
 $RETRY_CONTEXT"
 
-  # ─── Execute: fresh claude -p ───
-  STORY_START=$(date +%s)
-  OUTPUT=$(env -u CLAUDECODE claude -p "$USER_PROMPT" \
-    --append-system-prompt "$STATIC_CONTEXT" \
-    --max-turns "$MAX_TURNS" \
-    --allowedTools "Bash,Read,Edit,Write,Grep,Glob" \
-    --output-format text \
-    2>&1) || true
-  STORY_END=$(date +%s)
-  STORY_DURATION=$(( STORY_END - STORY_START ))
+    # ─── Execute: fresh claude -p ───
+    HEAD_BEFORE=$(git rev-parse HEAD)
+    STORY_START=$(date +%s)
+    OUTPUT=$(env -u CLAUDECODE claude -p "$USER_PROMPT" \
+      --append-system-prompt "$STATIC_CONTEXT" \
+      --max-turns "$MAX_TURNS" \
+      --allowedTools "Bash,Read,Edit,Write,Grep,Glob" \
+      --output-format text \
+      2>&1) || true
+    STORY_END=$(date +%s)
+    STORY_DURATION=$(( STORY_END - STORY_START ))
 
-  # ─── Parse completion signal ───
-  if echo "$OUTPUT" | grep -q "<promise>STORY-${STORY_KEY}-DONE</promise>"; then
-    echo "  ✅ Story $STORY_KEY — DONE (${STORY_DURATION}s)"
-    update_story_status "$STORY_KEY" "done" "completed $(timestamp) (${STORY_DURATION}s)"
-    update_sprint_status "$STORY_KEY" "done"
-    COMPLETED=$((COMPLETED + 1))
-    STORIES_SINCE_REVIEW=$((STORIES_SINCE_REVIEW + 1))
+    # ─── Parse completion signal ───
+    if echo "$OUTPUT" | grep -q "<promise>STORY-${STORY_KEY}-DONE</promise>"; then
+      echo "  ✅ Story $STORY_KEY — DONE (${STORY_DURATION}s, session $((CONTINUATIONS + 1)))"
+      update_story_status "$STORY_KEY" "done" "completed $(timestamp) (${STORY_DURATION}s)"
+      update_sprint_status "$STORY_KEY" "done"
+      COMPLETED=$((COMPLETED + 1))
+      STORIES_SINCE_REVIEW=$((STORIES_SINCE_REVIEW + 1))
 
-    SUMMARY=$(echo "$OUTPUT" | sed -n '/^SUMMARY:/,/^<promise>/p' | head -n -1)
-    [ -n "$SUMMARY" ] && append_relay_notes "### Story $STORY_KEY
+      SUMMARY=$(echo "$OUTPUT" | sed -n '/^SUMMARY:/,/^<promise>/p' | head -n -1)
+      [ -n "$SUMMARY" ] && append_relay_notes "### Story $STORY_KEY
 $SUMMARY"
 
-    { echo "# Story $STORY_KEY — Execution Record"; echo ""; echo "**Status:** done"; echo "**Completed:** $(timestamp)"; echo "**Duration:** ${STORY_DURATION}s"; echo ""; [ -n "$SUMMARY" ] && { echo "## Summary"; echo "$SUMMARY"; echo ""; }; } > "$RUNTIME_DIR/story-${STORY_KEY}-record.md"
+      { echo "# Story $STORY_KEY — Execution Record"; echo ""; echo "**Status:** done"; echo "**Completed:** $(timestamp)"; echo "**Duration:** ${STORY_DURATION}s"; echo "**Sessions:** $((CONTINUATIONS + 1))"; echo ""; [ -n "$SUMMARY" ] && { echo "## Summary"; echo "$SUMMARY"; echo ""; }; } > "$RUNTIME_DIR/story-${STORY_KEY}-record.md"
 
-    # Post-DONE review
-    if [ "$REVIEW_EVERY" -gt 0 ] && [ "$STORIES_SINCE_REVIEW" -ge "$REVIEW_EVERY" ] && [ -f "$AMELIA_PROMPT" ]; then
-      echo "  🔍 Periodic Amelia review..."
-      STORIES_SINCE_REVIEW=0
-      AMELIA_OUTPUT=$(env -u CLAUDECODE claude -p "## Periodic Review (after Story $STORY_KEY)
+      # Post-DONE review
+      if [ "$REVIEW_EVERY" -gt 0 ] && [ "$STORIES_SINCE_REVIEW" -ge "$REVIEW_EVERY" ] && [ -f "$AMELIA_PROMPT" ]; then
+        echo "  🔍 Periodic Amelia review..."
+        STORIES_SINCE_REVIEW=0
+        AMELIA_OUTPUT=$(env -u CLAUDECODE claude -p "## Periodic Review (after Story $STORY_KEY)
 Verify ACs met and no drift.
 ## Progress
 $(cat "$PROGRESS_FILE")
@@ -415,33 +431,35 @@ $(cat "$PROGRESS_FILE")
 $(git log --oneline -20)
 ## Story
 $(cat "$STORY_FILE")" \
-        --append-system-prompt "$(cat "$AMELIA_PROMPT")" \
-        --max-turns "$AMELIA_MAX_TURNS" \
-        --allowedTools "Read,Grep,Glob,Bash" \
-        --output-format text 2>&1) || true
+          --append-system-prompt "$(cat "$AMELIA_PROMPT")" \
+          --max-turns "$AMELIA_MAX_TURNS" \
+          --allowedTools "Read,Grep,Glob,Bash" \
+          --output-format text 2>&1) || true
 
-      VERDICT=$(parse_json_field "$AMELIA_OUTPUT" "action")
-      if [ "$VERDICT" = "halt" ]; then echo "  🛑 Amelia: HALT — $(parse_json_field "$AMELIA_OUTPUT" "reason")"; break; fi
-      RELAY=$(parse_json_field "$AMELIA_OUTPUT" "relay_notes")
-      [ -n "$RELAY" ] && append_relay_notes "### Amelia Review (after $STORY_KEY)
+        VERDICT=$(parse_json_field "$AMELIA_OUTPUT" "action")
+        if [ "$VERDICT" = "halt" ]; then echo "  🛑 Amelia: HALT — $(parse_json_field "$AMELIA_OUTPUT" "reason")"; STORY_RESULT="halt"; break; fi
+        RELAY=$(parse_json_field "$AMELIA_OUTPUT" "relay_notes")
+        [ -n "$RELAY" ] && append_relay_notes "### Amelia Review (after $STORY_KEY)
 $RELAY"
-    fi
+      fi
 
-  elif echo "$OUTPUT" | grep -q "<promise>STORY-${STORY_KEY}-BLOCKED:"; then
-    BLOCK_REASON=$(echo "$OUTPUT" | grep -o "<promise>STORY-${STORY_KEY}-BLOCKED:[^<]*</promise>" | sed "s/<promise>STORY-${STORY_KEY}-BLOCKED://;s/<\/promise>//")
-    echo "  🛑 Story $STORY_KEY — BLOCKED: $BLOCK_REASON (${STORY_DURATION}s)"
-    update_story_status "$STORY_KEY" "blocked" "$BLOCK_REASON"
-    update_sprint_status "$STORY_KEY" "blocked"
-    BLOCKED=$((BLOCKED + 1))
-    STORIES_SINCE_REVIEW=$((STORIES_SINCE_REVIEW + 1))
+      STORY_RESULT="done"
+      break  # inner loop — story complete, move to next story
 
-    RECORD_FILE="$RUNTIME_DIR/story-${STORY_KEY}-record.md"
-    { echo "# Story $STORY_KEY — Execution Record"; echo ""; echo "**Status:** blocked"; echo "**Blocked:** $(timestamp)"; echo "**Duration:** ${STORY_DURATION}s"; echo "**Block reason:** $BLOCK_REASON"; echo ""; } > "$RECORD_FILE"
+    elif echo "$OUTPUT" | grep -q "<promise>STORY-${STORY_KEY}-BLOCKED:"; then
+      BLOCK_REASON=$(echo "$OUTPUT" | grep -o "<promise>STORY-${STORY_KEY}-BLOCKED:[^<]*</promise>" | sed "s/<promise>STORY-${STORY_KEY}-BLOCKED://;s/<\/promise>//")
+      echo "  🛑 Story $STORY_KEY — BLOCKED: $BLOCK_REASON (${STORY_DURATION}s)"
+      update_story_status "$STORY_KEY" "blocked" "$BLOCK_REASON"
+      update_sprint_status "$STORY_KEY" "blocked"
+      BLOCKED=$((BLOCKED + 1))
 
-    # Call Amelia
-    if [ -f "$AMELIA_PROMPT" ]; then
-      echo "  🔍 Calling Amelia for review..."
-      AMELIA_OUTPUT=$(env -u CLAUDECODE claude -p "## Progress
+      RECORD_FILE="$RUNTIME_DIR/story-${STORY_KEY}-record.md"
+      { echo "# Story $STORY_KEY — Execution Record"; echo ""; echo "**Status:** blocked"; echo "**Blocked:** $(timestamp)"; echo "**Duration:** ${STORY_DURATION}s"; echo "**Block reason:** $BLOCK_REASON"; echo ""; } > "$RECORD_FILE"
+
+      # Call Amelia
+      if [ -f "$AMELIA_PROMPT" ]; then
+        echo "  🔍 Calling Amelia for review..."
+        AMELIA_OUTPUT=$(env -u CLAUDECODE claude -p "## Progress
 $(cat "$PROGRESS_FILE")
 ## Blockers
 $(cat "$BLOCKERS_FILE")
@@ -449,66 +467,95 @@ $(cat "$BLOCKERS_FILE")
 $(git log --oneline -20)
 ## Blocked Story
 $(cat "$STORY_FILE")" \
-        --append-system-prompt "$(cat "$AMELIA_PROMPT")" \
-        --max-turns "$AMELIA_MAX_TURNS" \
-        --allowedTools "Read,Grep,Glob,Bash" \
-        --output-format text 2>&1) || true
+          --append-system-prompt "$(cat "$AMELIA_PROMPT")" \
+          --max-turns "$AMELIA_MAX_TURNS" \
+          --allowedTools "Read,Grep,Glob,Bash" \
+          --output-format text 2>&1) || true
 
-      VERDICT=$(parse_json_field "$AMELIA_OUTPUT" "action")
-      case "$VERDICT" in
-        retry)
-          echo "  🔄 Amelia: retry with guidance"
-          GUIDANCE=$(parse_json_field "$AMELIA_OUTPUT" "guidance")
-          [ -n "$GUIDANCE" ] && { echo "## Amelia Guidance (attempt $((CURRENT_ATTEMPTS + 1)))"; echo ""; echo "$GUIDANCE"; echo ""; } >> "$RECORD_FILE"
-          RELAY=$(parse_json_field "$AMELIA_OUTPUT" "relay_notes")
-          [ -n "$RELAY" ] && append_relay_notes "### Amelia Review (retry $STORY_KEY)
+        VERDICT=$(parse_json_field "$AMELIA_OUTPUT" "action")
+        case "$VERDICT" in
+          retry)
+            echo "  🔄 Amelia: retry with guidance"
+            GUIDANCE=$(parse_json_field "$AMELIA_OUTPUT" "guidance")
+            [ -n "$GUIDANCE" ] && { echo "## Amelia Guidance (attempt $CURRENT_ATTEMPTS)"; echo ""; echo "$GUIDANCE"; echo ""; } >> "$RECORD_FILE"
+            RELAY=$(parse_json_field "$AMELIA_OUTPUT" "relay_notes")
+            [ -n "$RELAY" ] && append_relay_notes "### Amelia Review (retry $STORY_KEY)
 $RELAY"
-          update_story_status "$STORY_KEY" "pending" "retry after review"
-          update_sprint_status "$STORY_KEY" "in-progress"
-          ;;
-        skip)
-          echo "  ⏭  Amelia: skip"
-          update_story_status "$STORY_KEY" "skipped" "skipped by review"
-          update_sprint_status "$STORY_KEY" "ready-for-dev"
-          SKIP_LIST=$(parse_json_array_field "$AMELIA_OUTPUT" "skip_stories")
-          if [ -n "$SKIP_LIST" ]; then
-            echo "  ⏭  Also skipping: $SKIP_LIST"
-            for SK in $SKIP_LIST; do
-              update_story_status "$SK" "skipped" "depends on blocked $STORY_KEY"
-              update_sprint_status "$SK" "ready-for-dev"
-            done
-          fi
-          ;;
-        halt)
-          echo "  🛑 Amelia: HALT — $(parse_json_field "$AMELIA_OUTPUT" "reason")"
-          break
-          ;;
-        continue)
-          echo "  ➡️  Amelia: continue — but halting pipeline (sequential dependencies)"
-          break
-          ;;
-        *)
-          echo "  ⚠️  Could not parse Amelia's verdict — halting pipeline for safety."
-          echo "$AMELIA_OUTPUT" > "$RUNTIME_DIR/amelia-debug-${STORY_KEY}.txt"
-          break
-          ;;
-      esac
+            update_story_status "$STORY_KEY" "pending" "retry after review"
+            update_sprint_status "$STORY_KEY" "in-progress"
+            ;;
+          skip)
+            echo "  ⏭  Amelia: skip"
+            update_story_status "$STORY_KEY" "skipped" "skipped by review"
+            update_sprint_status "$STORY_KEY" "ready-for-dev"
+            SKIP_LIST=$(parse_json_array_field "$AMELIA_OUTPUT" "skip_stories")
+            if [ -n "$SKIP_LIST" ]; then
+              echo "  ⏭  Also skipping: $SKIP_LIST"
+              for SK in $SKIP_LIST; do
+                update_story_status "$SK" "skipped" "depends on blocked $STORY_KEY"
+                update_sprint_status "$SK" "ready-for-dev"
+              done
+            fi
+            ;;
+          halt)
+            echo "  🛑 Amelia: HALT — $(parse_json_field "$AMELIA_OUTPUT" "reason")"
+            STORY_RESULT="halt"
+            ;;
+          *)
+            echo "  ⚠️  Could not parse Amelia's verdict — halting pipeline for safety."
+            echo "$AMELIA_OUTPUT" > "$RUNTIME_DIR/amelia-debug-${STORY_KEY}.txt"
+            STORY_RESULT="halt"
+            ;;
+        esac
+      else
+        echo "  ⚠️  Amelia prompt not found — halting pipeline (sequential dependencies)."
+        STORY_RESULT="halt"
+      fi
+
+      STORY_RESULT="${STORY_RESULT:-blocked}"
+      break  # inner loop — blocked, let outer loop decide
+
     else
-      echo "  ⚠️  Amelia prompt not found — halting pipeline (sequential dependencies)."
-      break
+      # ─── Max turns or unexpected exit — check if progress was made ───
+      HEAD_AFTER=$(git rev-parse HEAD)
+      COMMITS_MADE=$(git rev-list --count "$HEAD_BEFORE".."$HEAD_AFTER" 2>/dev/null || echo 0)
+      echo "$OUTPUT" > "$RUNTIME_DIR/ralph-debug-${STORY_KEY}.txt"
+
+      # Clean up uncommitted partial work (mid-task state is unreliable)
+      [ -n "$(git status --porcelain)" ] && { echo "  🧹 Reverting uncommitted changes..."; git checkout .; }
+
+      if [ "$COMMITS_MADE" -gt 0 ] && [ "$CONTINUATIONS" -lt "$MAX_CONTINUATIONS" ]; then
+        # Progress was made — continuation, not a block
+        CONTINUATIONS=$((CONTINUATIONS + 1))
+        echo "  ⏱  Story $STORY_KEY — max turns, but $COMMITS_MADE commit(s) made (${STORY_DURATION}s)"
+        echo "  🔄 Launching continuation $CONTINUATIONS/$MAX_CONTINUATIONS..."
+        increment_attempts "$STORY_KEY"
+        append_relay_notes "### Story $STORY_KEY — continuation $CONTINUATIONS
+- Commits this session: $COMMITS_MADE"
+        update_story_status "$STORY_KEY" "in-progress" "continuation $CONTINUATIONS/$MAX_CONTINUATIONS"
+        continue  # inner while loop — re-run same story with fresh instance
+
+      else
+        if [ "$COMMITS_MADE" -eq 0 ]; then
+          echo "  ⏱  Story $STORY_KEY — max turns, NO commits made (${STORY_DURATION}s)"
+          echo "  🛑 No progress — this is a real block."
+        else
+          echo "  ⏱  Story $STORY_KEY — exhausted $MAX_CONTINUATIONS continuations (${STORY_DURATION}s)"
+          echo "  🛑 Story too large for automated execution."
+        fi
+        update_story_status "$STORY_KEY" "blocked" "max-turns, no progress $(timestamp)"
+        update_sprint_status "$STORY_KEY" "blocked"
+        BLOCKED=$((BLOCKED + 1))
+        STORY_RESULT="blocked"
+        break  # inner loop
+      fi
     fi
+  done  # inner while loop (continuations)
 
-  else
-    echo "  ⏱  Story $STORY_KEY — max turns or unexpected exit (${STORY_DURATION}s)"
-    update_story_status "$STORY_KEY" "blocked" "max-turns reached $(timestamp)"
-    update_sprint_status "$STORY_KEY" "blocked"
-    BLOCKED=$((BLOCKED + 1))
-    echo "$OUTPUT" > "$RUNTIME_DIR/ralph-debug-${STORY_KEY}.txt"
-    [ -n "$(git status --porcelain)" ] && { echo "  🧹 Reverting uncommitted changes..."; git checkout .; }
-
-    # Stop pipeline — sequential stories depend on previous completions
+  # Check if we need to halt the outer pipeline
+  if [ "$STORY_RESULT" = "halt" ] || [ "$STORY_RESULT" = "blocked" ]; then
     echo "  🛑 Halting pipeline — downstream stories depend on this one."
-    break
+    break  # outer for loop
   fi
 
   echo ""
