@@ -481,8 +481,10 @@ $(cat "$STORY_FILE")" \
             RELAY=$(parse_json_field "$AMELIA_OUTPUT" "relay_notes")
             [ -n "$RELAY" ] && append_relay_notes "### Amelia Review (retry $STORY_KEY)
 $RELAY"
-            update_story_status "$STORY_KEY" "pending" "retry after review"
+            update_story_status "$STORY_KEY" "in-progress" "retry after review"
             update_sprint_status "$STORY_KEY" "in-progress"
+            increment_attempts "$STORY_KEY"
+            STORY_RESULT="retry"
             ;;
           skip)
             echo "  ⏭  Amelia: skip"
@@ -496,6 +498,7 @@ $RELAY"
                 update_sprint_status "$SK" "ready-for-dev"
               done
             fi
+            STORY_RESULT="skip"
             ;;
           halt)
             echo "  🛑 Amelia: HALT — $(parse_json_field "$AMELIA_OUTPUT" "reason")"
@@ -512,8 +515,12 @@ $RELAY"
         STORY_RESULT="halt"
       fi
 
+      # Amelia retry → re-enter inner loop; everything else → break out
+      if [ "$STORY_RESULT" = "retry" ]; then
+        continue  # inner while loop — fresh instance with Amelia's guidance
+      fi
       STORY_RESULT="${STORY_RESULT:-blocked}"
-      break  # inner loop — blocked, let outer loop decide
+      break  # inner loop — blocked/skip/halt, let outer loop decide
 
     else
       # ─── Max turns or unexpected exit — check if progress was made ───
