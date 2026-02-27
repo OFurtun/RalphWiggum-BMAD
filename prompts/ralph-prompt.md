@@ -50,6 +50,7 @@ The scope should match the story's domain (e.g., `auth`, `db`, `ui`, `i18n`).
 - Stage by explicit file path — list every file you created or modified
 - If you created a new directory with many files, you may `git add src/lib/domains/` (the specific directory)
 - NEVER stage `.env`, `.env.local`, or any file containing secrets
+- NEVER stage anything in `_ralph/` — that directory is runtime state managed by the orchestrator
 - When in doubt, run `git status` first and review what would be staged
 
 ## Completion Protocol

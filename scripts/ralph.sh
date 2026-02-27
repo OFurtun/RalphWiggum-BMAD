@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Allow nested claude -p processes when launched from within a Claude Code session
+unset CLAUDECODE 2>/dev/null || true
+
 # Ralph Wiggum Sequential Story Executor
 # Each story gets a fresh claude -p process. Zero context accumulation.
 # Progress persists in PROGRESS.md (the relay baton) and git history.
@@ -21,7 +24,7 @@ AMELIA_PROMPT="$SCRIPT_DIR/amelia-review-prompt.md"
 TEST_CMD="npm run test"
 CHECK_CMD="npm run check"
 LINT_CMD="npm run lint"
-MAX_TURNS=50
+MAX_TURNS=200
 AMELIA_MAX_TURNS=20
 REVIEW_EVERY=0  # 0 = only on block
 START_FROM=""
@@ -59,7 +62,7 @@ OPTIONS:
   --project-context <p>   Project context file
   --ralph-prompt <path>   Ralph system prompt
   --amelia-prompt <path>  Amelia review prompt
-  --max-turns <N>         Max turns per story (default: 50)
+  --max-turns <N>         Max turns per story (default: 200)
   --review-every <N>      Call Amelia review every N stories (default: 0 = only on block)
   --start-from <N.M>      Start from specific story (e.g., 1.3)
   --retry-blocked         Re-attempt previously blocked stories
@@ -322,7 +325,7 @@ for STORY_FILE in "${STORY_FILES[@]}"; do
 
       if [ -f "$AMELIA_PROMPT" ]; then
         echo "  🔍 Calling Amelia to evaluate regression..."
-        AMELIA_OUTPUT=$(claude -p "## Regression Test Failure
+        AMELIA_OUTPUT=$(env -u CLAUDECODE claude -p "## Regression Test Failure
 A regression test failed BEFORE starting Story $STORY_KEY.
 ## Progress
 $(cat "$PROGRESS_FILE")
@@ -377,7 +380,7 @@ $RETRY_CONTEXT"
 
   # ─── Execute: fresh claude -p ───
   STORY_START=$(date +%s)
-  OUTPUT=$(claude -p "$USER_PROMPT" \
+  OUTPUT=$(env -u CLAUDECODE claude -p "$USER_PROMPT" \
     --append-system-prompt "$STATIC_CONTEXT" \
     --max-turns "$MAX_TURNS" \
     --allowedTools "Bash,Read,Edit,Write,Grep,Glob" \
@@ -404,7 +407,7 @@ $SUMMARY"
     if [ "$REVIEW_EVERY" -gt 0 ] && [ "$STORIES_SINCE_REVIEW" -ge "$REVIEW_EVERY" ] && [ -f "$AMELIA_PROMPT" ]; then
       echo "  🔍 Periodic Amelia review..."
       STORIES_SINCE_REVIEW=0
-      AMELIA_OUTPUT=$(claude -p "## Periodic Review (after Story $STORY_KEY)
+      AMELIA_OUTPUT=$(env -u CLAUDECODE claude -p "## Periodic Review (after Story $STORY_KEY)
 Verify ACs met and no drift.
 ## Progress
 $(cat "$PROGRESS_FILE")
@@ -438,7 +441,7 @@ $RELAY"
     # Call Amelia
     if [ -f "$AMELIA_PROMPT" ]; then
       echo "  🔍 Calling Amelia for review..."
-      AMELIA_OUTPUT=$(claude -p "## Progress
+      AMELIA_OUTPUT=$(env -u CLAUDECODE claude -p "## Progress
 $(cat "$PROGRESS_FILE")
 ## Blockers
 $(cat "$BLOCKERS_FILE")
@@ -480,12 +483,19 @@ $RELAY"
           echo "  🛑 Amelia: HALT — $(parse_json_field "$AMELIA_OUTPUT" "reason")"
           break
           ;;
-        continue) echo "  ➡️  Amelia: continue (block acknowledged)" ;;
+        continue)
+          echo "  ➡️  Amelia: continue — but halting pipeline (sequential dependencies)"
+          break
+          ;;
         *)
-          echo "  ⚠️  Could not parse Amelia's verdict"
+          echo "  ⚠️  Could not parse Amelia's verdict — halting pipeline for safety."
           echo "$AMELIA_OUTPUT" > "$RUNTIME_DIR/amelia-debug-${STORY_KEY}.txt"
+          break
           ;;
       esac
+    else
+      echo "  ⚠️  Amelia prompt not found — halting pipeline (sequential dependencies)."
+      break
     fi
 
   else
@@ -495,6 +505,10 @@ $RELAY"
     BLOCKED=$((BLOCKED + 1))
     echo "$OUTPUT" > "$RUNTIME_DIR/ralph-debug-${STORY_KEY}.txt"
     [ -n "$(git status --porcelain)" ] && { echo "  🧹 Reverting uncommitted changes..."; git checkout .; }
+
+    # Stop pipeline — sequential stories depend on previous completions
+    echo "  🛑 Halting pipeline — downstream stories depend on this one."
+    break
   fi
 
   echo ""
