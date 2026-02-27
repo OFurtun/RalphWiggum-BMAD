@@ -79,7 +79,7 @@ EXAMPLES:
   ralph.sh --epic 2 --max-turns 80          More turns for complex stories
 
 STORY LIFECYCLE:
-  pending → in-progress → done | blocked | skipped
+  pending → in-progress → done | blocked
 
 COMPLETION SIGNALS:
   <promise>STORY-N.M-DONE</promise>           Story completed
@@ -223,7 +223,6 @@ update_sprint_status() {
     in-progress) sprint_stat="in-progress" ;;
     done)        sprint_stat="done" ;;
     blocked)     sprint_stat="in-progress" ;;
-    skipped)     sprint_stat="ready-for-dev" ;;
     *)           return ;;
   esac
   local tmpfile
@@ -245,16 +244,6 @@ parse_json_field() {
   echo "$output" | grep -o "\"$field\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | head -1 | sed "s/\"$field\"[[:space:]]*:[[:space:]]*\"//;s/\"$//"
 }
 
-parse_json_array_field() {
-  local output="$1" field="$2"
-  if command -v jq &>/dev/null; then
-    local arr=""
-    arr=$(echo "$output" | sed -n '/^{/,/^}/p' | jq -r ".$field[]? // empty" 2>/dev/null)
-    [ -z "$arr" ] && arr=$(echo "$output" | sed -n '/```json/,/```/p' | sed '1d;$d' | jq -r ".$field[]? // empty" 2>/dev/null)
-    echo "$arr"; return
-  fi
-  echo "$output" | grep -o "\"$field\"[[:space:]]*:[[:space:]]*\[[^]]*\]" | head -1
-}
 
 # ─── Collect stories ───
 mapfile -t STORY_FILES < <(ls "$STORIES_DIR"/"$EPIC"-*-*.md 2>/dev/null | sort -V)
@@ -282,7 +271,7 @@ if [ ! -f "$BLOCKERS_FILE" ]; then
 fi
 
 # ─── Main loop ───
-COMPLETED=0 BLOCKED=0 SKIPPED=0 STORIES_SINCE_REVIEW=0
+COMPLETED=0 BLOCKED=0 STORIES_SINCE_REVIEW=0
 
 for STORY_FILE in "${STORY_FILES[@]}"; do
   BASENAME=$(basename "$STORY_FILE" .md)
@@ -299,8 +288,7 @@ for STORY_FILE in "${STORY_FILES[@]}"; do
 
   # Skip logic
   if [ "$STATUS" = "done" ]; then echo "  ⏭  Story $STORY_KEY — already done"; continue; fi
-  if [ "$STATUS" = "blocked" ] && [ "$RETRY_BLOCKED" = false ]; then echo "  ⏭  Story $STORY_KEY — blocked (use --retry-blocked)"; SKIPPED=$((SKIPPED + 1)); continue; fi
-  if [ "$STATUS" = "skipped" ]; then echo "  ⏭  Story $STORY_KEY — skipped by review"; SKIPPED=$((SKIPPED + 1)); continue; fi
+  if [ "$STATUS" = "blocked" ] && [ "$RETRY_BLOCKED" = false ]; then echo "  ⏭  Story $STORY_KEY — blocked (use --retry-blocked)"; continue; fi
 
   CURRENT_ATTEMPTS=$(get_story_attempts "$STORY_KEY")
 
@@ -473,54 +461,31 @@ $(cat "$STORY_FILE")" \
           --output-format text 2>&1) || true
 
         VERDICT=$(parse_json_field "$AMELIA_OUTPUT" "action")
-        case "$VERDICT" in
-          retry)
-            echo "  🔄 Amelia: retry with guidance"
-            GUIDANCE=$(parse_json_field "$AMELIA_OUTPUT" "guidance")
-            [ -n "$GUIDANCE" ] && { echo "## Amelia Guidance (attempt $CURRENT_ATTEMPTS)"; echo ""; echo "$GUIDANCE"; echo ""; } >> "$RECORD_FILE"
-            RELAY=$(parse_json_field "$AMELIA_OUTPUT" "relay_notes")
-            [ -n "$RELAY" ] && append_relay_notes "### Amelia Review (retry $STORY_KEY)
+        if [ "$VERDICT" = "retry" ]; then
+          echo "  🔄 Amelia: retry with guidance"
+          GUIDANCE=$(parse_json_field "$AMELIA_OUTPUT" "guidance")
+          [ -n "$GUIDANCE" ] && { echo "## Amelia Guidance (attempt $CURRENT_ATTEMPTS)"; echo ""; echo "$GUIDANCE"; echo ""; } >> "$RECORD_FILE"
+          RELAY=$(parse_json_field "$AMELIA_OUTPUT" "relay_notes")
+          [ -n "$RELAY" ] && append_relay_notes "### Amelia Review (retry $STORY_KEY)
 $RELAY"
-            update_story_status "$STORY_KEY" "in-progress" "retry after review"
-            update_sprint_status "$STORY_KEY" "in-progress"
-            increment_attempts "$STORY_KEY"
-            STORY_RESULT="retry"
-            ;;
-          skip)
-            echo "  ⏭  Amelia: skip"
-            update_story_status "$STORY_KEY" "skipped" "skipped by review"
-            update_sprint_status "$STORY_KEY" "ready-for-dev"
-            SKIP_LIST=$(parse_json_array_field "$AMELIA_OUTPUT" "skip_stories")
-            if [ -n "$SKIP_LIST" ]; then
-              echo "  ⏭  Also skipping: $SKIP_LIST"
-              for SK in $SKIP_LIST; do
-                update_story_status "$SK" "skipped" "depends on blocked $STORY_KEY"
-                update_sprint_status "$SK" "ready-for-dev"
-              done
-            fi
-            STORY_RESULT="skip"
-            ;;
-          halt)
-            echo "  🛑 Amelia: HALT — $(parse_json_field "$AMELIA_OUTPUT" "reason")"
-            STORY_RESULT="halt"
-            ;;
-          *)
-            echo "  ⚠️  Could not parse Amelia's verdict — halting pipeline for safety."
-            echo "$AMELIA_OUTPUT" > "$RUNTIME_DIR/amelia-debug-${STORY_KEY}.txt"
-            STORY_RESULT="halt"
-            ;;
-        esac
+          update_story_status "$STORY_KEY" "in-progress" "retry after review"
+          update_sprint_status "$STORY_KEY" "in-progress"
+          increment_attempts "$STORY_KEY"
+          continue  # inner while loop — fresh instance with Amelia's guidance
+        else
+          # halt (explicit or unparseable) — sequential pipeline requires human intervention
+          HALT_REASON=$(parse_json_field "$AMELIA_OUTPUT" "reason")
+          echo "  🛑 Amelia: HALT — ${HALT_REASON:-verdict was '$VERDICT'}"
+          [ "$VERDICT" != "halt" ] && echo "$AMELIA_OUTPUT" > "$RUNTIME_DIR/amelia-debug-${STORY_KEY}.txt"
+          STORY_RESULT="halt"
+        fi
       else
-        echo "  ⚠️  Amelia prompt not found — halting pipeline (sequential dependencies)."
+        echo "  ⚠️  Amelia prompt not found — halting pipeline."
         STORY_RESULT="halt"
       fi
 
-      # Amelia retry → re-enter inner loop; everything else → break out
-      if [ "$STORY_RESULT" = "retry" ]; then
-        continue  # inner while loop — fresh instance with Amelia's guidance
-      fi
       STORY_RESULT="${STORY_RESULT:-blocked}"
-      break  # inner loop — blocked/skip/halt, let outer loop decide
+      break  # inner loop — halt, let outer loop decide
 
     else
       # ─── Max turns or unexpected exit — check if progress was made ───
@@ -575,7 +540,6 @@ echo "  Ralph Wiggum Executor — Epic $EPIC — COMPLETE"
 echo "═══════════════════════════════════════════════════"
 echo "  ✅ Completed: $COMPLETED"
 echo "  🛑 Blocked:   $BLOCKED"
-echo "  ⏭  Skipped:   $SKIPPED"
 echo "  📊 Total:     ${#STORY_FILES[@]}"
 echo ""
 echo "  Branch: $(git branch --show-current)"
