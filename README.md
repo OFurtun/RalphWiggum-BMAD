@@ -45,27 +45,27 @@ ralph.sh (bash loop)           ← Zero intelligence. Parses signals, calls proc
 ```
                               /ralph --epic N
                                     │
-                    ┌───────────────────────────────┐
+                    ┌────────────────────────────────┐
                     │          SKILL.md              │
-                    │                               │
+                    │                                │
                     │  Validate prerequisites        │
                     │  Initialize PROGRESS.md        │
                     │  Create branch ralph/epic-N    │
-                    └───────────────┬───────────────┘
+                    └───────────────┬────────────────┘
                                     │
-     ┌──────────────────────────────▼──────────────────────────────┐
-     │                       ralph.sh                              │
-     │                  "Zero intelligence bash loop"              │
-     │                                                             │
-     │  ┌────────────────────────────────────────────────────────┐ │
-     │  │  OUTER LOOP ─ for each story (sequential)             │ │
-     │  │                                                        │ │
-     │  │  Read PROGRESS.md → skip done/blocked → set in-progress│ │
-     │  │                                                        │ │
-     │  │  ┌──────────────────────────────────────────────────┐  │ │
-     │  │  │  INNER LOOP ─ continuations (max 5 per story)    │  │ │
-     │  │  │                                                  │  │ │
-     │  │  │  ┌──────────────────────────────────┐            │  │ │
+     ┌──────────────────────────────▼───────────────────────────────┐
+     │                       ralph.sh                               │
+     │                  "Zero intelligence bash loop"               │
+     │                                                              │
+     │  ┌─────────────────────────────────────────────────────────┐ │
+     │  │  OUTER LOOP ─ for each story (sequential)               │ │
+     │  │                                                         │ │
+     │  │  Read PROGRESS.md → skip done/blocked → set in-progress │ │
+     │  │                                                         │ │
+     │  │  ┌───────────────────────────────────────────────────┐  │ │
+     │  │  │  INNER LOOP ─ continuations (max 5 per story)     │  │ │
+     │  │  │                                                   │  │ │
+     │  │  │  ┌───────────────────────────────────┐            │  │ │
      │  │  │  │    Fresh claude -p  (Ralph)       │            │  │ │
      │  │  │  │    Zero context accumulation      │            │  │ │
      │  │  │  │                                   │            │  │ │
@@ -84,7 +84,7 @@ ralph.sh (bash loop)           ← Zero intelligence. Parses signals, calls proc
      │  │  │        ┌────────┴────────┬──────────────┐         │  │ │
      │  │  │        ▼                 ▼              ▼         │  │ │
      │  │  │     DONE             BLOCKED        MAX-TURNS     │  │ │
-     │  │  │       ✓                ✗           (no signal)    │  │ │
+     │  │  │       ✓                ✗           (no signal)   │  │ │
      │  │  │       │                │              │           │  │ │
      │  │  │       │                │         commits made?    │  │ │
      │  │  │       │                │          ╱        ╲      │  │ │
@@ -96,50 +96,50 @@ ralph.sh (bash loop)           ← Zero intelligence. Parses signals, calls proc
      │  │  │       │                │      git work    blocked)│  │ │
      │  │  │       │                │      preserved)          │  │ │
      │  │  └───────┼────────────────┼──────────────────────────┘  │ │
-     │  │          │                │                              │ │
-     │  │          │       ┌────────▼────────────────┐             │ │
-     │  │          │       │  Fresh claude -p (Amelia)│             │ │
-     │  │          │       │  Senior code reviewer   │             │ │
-     │  │          │       │                         │             │ │
-     │  │          │       │  Reads everything:      │             │ │
-     │  │          │       │   • PROGRESS.md         │             │ │
-     │  │          │       │   • BLOCKERS.md         │             │ │
-     │  │          │       │   • git log             │             │ │
-     │  │          │       │   • Architecture docs   │             │ │
-     │  │          │       │                         │             │ │
-     │  │          │       │  Verdict:               │             │ │
-     │  │          │       │  ┌────────┬────────┐    │             │ │
-     │  │          │       │  │ RETRY  │  HALT  │    │             │ │
-     │  │          │       │  │ +guide │  stop  │    │             │ │
-     │  │          │       │  └───┬────┴───┬────┘    │             │ │
-     │  │          │       └──────┼────────┼─────────┘             │ │
-     │  │          │              │        │                       │ │
-     │  │          │         inner loop    ▼                       │ │
-     │  │          │         (w/ guidance) STOP ──► Human          │ │
-     │  │          │                                               │ │
-     │  │          ▼                                               │ │
-     │  │     next story ─────────────────────────────────────►    │ │
+     │  │          │                │                             │ │
+     │  │          │       ┌────────▼─────────────────┐           │ │
+     │  │          │       │  Fresh claude -p (Amelia)│           │ │
+     │  │          │       │  Senior code reviewer    │           │ │
+     │  │          │       │                          │           │ │
+     │  │          │       │  Reads everything:       │           │ │
+     │  │          │       │   • PROGRESS.md          │           │ │
+     │  │          │       │   • BLOCKERS.md          │           │ │
+     │  │          │       │   • git log              │           │ │
+     │  │          │       │   • Architecture docs    │           │ │
+     │  │          │       │                          │           │ │
+     │  │          │       │  Verdict:                │           │ │
+     │  │          │       │  ┌────────┬────────┐     │           │ │
+     │  │          │       │  │ RETRY  │  HALT  │     │           │ │
+     │  │          │       │  │ +guide │  stop  │     │           │ │
+     │  │          │       │  └───┬────┴───┬────┘     │           │ │
+     │  │          │       └──────┼────────┼──────────┘           │ │
+     │  │          │              │        │                      │ │
+     │  │          │         inner loop    ▼                      │ │
+     │  │          │         (w/ guidance) STOP ──► Human         │ │
+     │  │          │                                              │ │
+     │  │          ▼                                              │ │
+     │  │     next story ─────────────────────────────────────►   │ │
      │  └─────────────────────────────────────────────────────────┘ │
-     └─────────────────────────────────────────────────────────────┘
+     └──────────────────────────────────────────────────────────────┘
 
-              ┌─────────── Shared State ───────────┐
-              │                                     │
-              │  PROGRESS.md       git history      │
+              ┌─────────── Shared State ─────────────┐
+              │                                      │
+              │  PROGRESS.md       git history       │
               │  (relay baton)     (committed code)  │
-              │  ┌────────────┐   ┌──────────────┐  │
+              │  ┌─────────────┐   ┌──────────────┐  │
               │  │ Story table │   │ feat: Task 1 │  │
               │  │ Relay notes │   │ feat: Task 2 │  │
               │  │ Attempts    │   │ test: Task 3 │  │
-              │  └────────────┘   └──────────────┘  │
-              │                                     │
-              │  BLOCKERS.md       story-N.M-record │
+              │  └─────────────┘   └──────────────┘  │
+              │                                      │
+              │  BLOCKERS.md       story-N.M-record  │
               │  (failure log)     (execution log)   │
-              │  ┌────────────┐   ┌──────────────┐  │
+              │  ┌─────────────┐   ┌──────────────┐  │
               │  │ Issue       │   │ Duration     │  │
               │  │ Attempts    │   │ Amelia notes │  │
               │  │ Needs       │   │ File list    │  │
-              │  └────────────┘   └──────────────┘  │
-              └─────────────────────────────────────┘
+              │  └─────────────┘   └──────────────┘  │
+              └──────────────────────────────────────┘
 ```
 
 Each `claude -p` invocation is a **disposable worker** with zero memory. The only things that survive between runs are **PROGRESS.md** (the relay baton) and **git commits** (the actual work). Ralph follows the story spec mechanically; Amelia provides the brains when things go wrong.
