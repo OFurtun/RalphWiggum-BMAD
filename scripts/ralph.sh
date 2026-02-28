@@ -401,11 +401,12 @@ $RETRY_CONTEXT"
       COMPLETED=$((COMPLETED + 1))
       STORIES_SINCE_REVIEW=$((STORIES_SINCE_REVIEW + 1))
 
+      DECISIONS=$(echo "$OUTPUT" | sed -n '/^DECISIONS:/,/^SUMMARY:/p' | head -n -1)
       SUMMARY=$(echo "$OUTPUT" | sed -n '/^SUMMARY:/,/^<promise>/p' | head -n -1)
       [ -n "$SUMMARY" ] && append_relay_notes "### Story $STORY_KEY
 $SUMMARY"
 
-      { echo "# Story $STORY_KEY — Execution Record"; echo ""; echo "**Status:** done"; echo "**Completed:** $(timestamp)"; echo "**Duration:** ${STORY_DURATION}s"; echo "**Sessions:** $((CONTINUATIONS + 1))"; echo ""; [ -n "$SUMMARY" ] && { echo "## Summary"; echo "$SUMMARY"; echo ""; }; } > "$RUNTIME_DIR/story-${STORY_KEY}-record.md"
+      { echo "# Story $STORY_KEY — Execution Record"; echo ""; echo "**Status:** done"; echo "**Completed:** $(timestamp)"; echo "**Duration:** ${STORY_DURATION}s"; echo "**Sessions:** $((CONTINUATIONS + 1))"; echo ""; [ -n "$DECISIONS" ] && [ "$DECISIONS" != "DECISIONS: none" ] && { echo "## Decisions"; echo "$DECISIONS" | sed '1s/^DECISIONS:\s*//'; echo ""; }; [ -n "$SUMMARY" ] && { echo "## Summary"; echo "$SUMMARY"; echo ""; }; } > "$RUNTIME_DIR/story-${STORY_KEY}-record.md"
 
       # Post-DONE review
       if [ "$REVIEW_EVERY" -gt 0 ] && [ "$STORIES_SINCE_REVIEW" -ge "$REVIEW_EVERY" ] && [ -f "$AMELIA_PROMPT" ]; then

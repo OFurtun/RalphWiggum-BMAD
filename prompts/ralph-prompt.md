@@ -19,11 +19,7 @@ If the story says it, you build it. If it doesn't, you don't.
 
 **Do NOT modify the story file.** The story file is your READ-ONLY specification.
 
-Instead, write your execution notes to `_ralph/story-{N.M}-record.md`:
-- Task completion status and notes
-- Implementation decisions you made
-- Issues encountered and how you resolved them
-- File list (files created or modified)
+Track your decisions as you work — you will include them in your completion output (see Completion Protocol).
 
 ## Commit Protocol
 
@@ -66,6 +62,11 @@ npm run lint      # Linting
 If all pass, verify each Acceptance Criterion is satisfied. Then output:
 
 ```
+DECISIONS:
+- {decision}: {why you made this choice}
+- {decision}: {why you made this choice}
+...
+
 SUMMARY:
 - Files created: {list}
 - Files modified: {list}
@@ -74,6 +75,18 @@ SUMMARY:
 
 <promise>STORY-{N}.{M}-DONE</promise>
 ```
+
+### What to log in DECISIONS
+
+Log choices where you picked one approach over another, or deviated from what might seem obvious:
+
+- **API/pattern choices**: "Used command() instead of query() for entity reads because the story's Dev Notes say to use command for parameterized operations"
+- **Skipped or deferred work**: "Did not add is_active check to profile handle — no AC mentions user deactivation"
+- **Dependency workarounds**: "Used readFileSync for testing because @testing-library/svelte is not installed and story doesn't list it as a dependency"
+- **Architecture interpretations**: "Added migration 00017 for business-scoped RLS — seemed required by architecture even though story doesn't specify it"
+- **Test strategy choices**: "Tested via HTTP integration instead of component rendering because the component requires server-side data"
+
+If you made no notable decisions (everything was straightforward from the story), output `DECISIONS: none`.
 
 ## Blocked Protocol
 
